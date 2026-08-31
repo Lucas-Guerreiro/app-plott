@@ -25,12 +25,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Escuta autenticação reativa do Firebase ou carrega sessão local
   useEffect(() => {
     let isMounted = true;
 
     if (isFirebaseConfigured && auth) {
-      const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      // Timeout de segurança: se o Firebase demorar mais de 5s, inicia como convidado
+      const safetyTimeout = setTimeout(() => {
+        if (isMounted && isLoading) {
+          const guest = authService.loginAsGuest();
+          setUser(guest);
+          setIsLoading(false);
+        }
+      }, 5000);
+
+      const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+        clearTimeout(safetyTimeout);
         if (!isMounted) return;
         if (firebaseUser) {
           const activeUser: User = {
@@ -46,7 +55,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           };
           setUser(activeUser);
         } else {
-          // Se não houver usuário logado no Firebase, inicia no modo visitante
           const guest = authService.loginAsGuest();
           setUser(guest);
         }
@@ -55,27 +63,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       return () => {
         isMounted = false;
+        clearTimeout(safetyTimeout);
         unsubscribe();
       };
     } else {
       async function initLocal() {
         try {
           const localUser = await authService.getCurrentUser();
-          if (localUser) {
+          if (localUser && isMounted) {
             setUser(localUser);
-          } else {
+          } else if (isMounted) {
             const guest = authService.loginAsGuest();
             setUser(guest);
           }
         } catch {
-          const guest = authService.loginAsGuest();
-          setUser(guest);
+          if (isMounted) {
+            const guest = authService.loginAsGuest();
+            setUser(guest);
+          }
         } finally {
-          setIsLoading(false);
+          if (isMounted) setIsLoading(false);
         }
       }
       initLocal();
     }
+
+    return () => { isMounted = false; };
   }, []);
 
   const login = useCallback(async (credentials: LoginCredentials) => {
@@ -124,6 +137,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const isAuthenticated = !!user && user.provider !== 'guest';
   const isGuest = !user || user.provider === 'guest';
+
+  // Enquanto o Firebase está inicializando, mostra tela de carregamento
+  if (isLoading) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-brand-600 to-sky-500 flex items-center justify-center shadow-lg animate-pulse">
+            <span className="text-2xl">🧭</span>
+          </div>
+          <p className="text-sm text-slate-500 dark:text-slate-400 font-medium animate-pulse">
+            Carregando Plott...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <AuthContext.Provider
